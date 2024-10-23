@@ -14,7 +14,7 @@ metadata:
   namespace: tekton-pipelines
 spec:
   rules:
-  - host: $DASHBOARD_URL
+  - host: ci.yourdomain.com
     http:
       paths:
       - pathType: ImplementationSpecific
@@ -23,6 +23,9 @@ spec:
             name: tekton-dashboard
             port:
               number: 9097
+  tls:
+    - hosts:
+      - ci.yourdomain.com
 EOF
 
 
