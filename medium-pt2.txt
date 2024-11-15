@@ -1,0 +1,161 @@
+Well, after create our clusters, lets start to configure some base tools for that.
+
+First Longhorn [https://longhorn.io/]. This tool manage storage for us. Login in the admin console and select menu Cluster > Tools > Longhorn
+
+In the second step of the wizard, lets set some configuration:
+Longhorn Default Settings:
+- Orphaned Data Cleanup: check
+- Deleting Confirmation Flag: check
+
+Longhorn Storage Class Settings:
+- Storage Class Retain Policy: Delete
+- Default Storage Class Replica Count: 1
+- Default Storage Class Data Locality: best-effort
+
+Service and Load Balancing:
+- Expose - Check
+- hostname: longhorn.yourdormain.com
+
+>> Install
+
+Second install monitoring [https://ranchermanager.docs.rancher.com/integrations-in-rancher/monitoring-and-alerting], it doesn't need to configure
+
+Third we install Harbor. Harbor is a container registry. With it we can proxy Docker, Github, Quay (public) and some private registries like amazon and azure:
+
+helm repo add harbor https://helm.goharbor.io # add the harbor helm repository
+helm fetch harbor/harbor --untar # fetch the harbor helm chart
+nano harbor/values.yaml 
+
+# change the following values:
+# expose.ingress.hosts.core: "hub.<yourdomain.com>"
+# externalURL: "https://hub.<yourdomain.com>"
+# harborAdminPassword: "admin"
+# metrics.enabled: true
+# metrics.serviceMonitor.enabled: true
+# cache.enabled: true
+
+helm upgrade --install --namespace harbor --create-namespace harbor harbor/ # install harbor
+
+some minutes after you can access https://hub.yourdomain.com using the admin user and the password that you set.
+
+Now lets install Gitlab, because the public instances, gitlab.com or github.com cannot access directly our cluster. To install gitlab we do:
+
+helm repo add gitlab https://charts.gitlab.io/ # add the gitlab helm repository
+helm fetch gitlab/gitlab --untar # fetch the gitlab helm chart
+nano gitlab/values.yaml # configure the gitlab
+
+# global.edition:ce
+# global.hosts.domain:yourdomain.com
+# global.hosts.https: false
+# global.ingress.configureCertmanager:false
+# monitoring.enabled:true
+# certmanager.install:false # we already have cert-manager
+# prometheus.install:false # we already have prometheus
+# nginx-ingress.enabled:false # we already have nginx-ingress
+
+# before install, you may have to change pvc size to 2GiB in files:
+#   gitlab/charts/minio/values.yaml 
+#   gitlab/charts/gitlab/values.yaml 
+#   gitlab/charts/gitlab/charts/gitaly/values.yaml
+#   gitlab/charts/postgresql/values.yaml 
+#   gitlab/charts/redis/values.yaml 
+that way gitlab will consume less space than the default
+
+# install gitlab on cluster
+helm upgrade --install --namespace gitlab --create-namespace gitlab gitlab/
+
+# get the root password
+kubectl get secret --namespace gitlab gitlab-gitlab-initial-root-password -ojsonpath='{.data.password}' | base64 --decode ; echo
+
+
+Now, for CD we have ArgoCD, it's a great and common tool for this operation, so:
+
+# this will install the ArgoCD CLI
+curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+rm argocd-linux-amd64
+
+
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+kubectl -n argocd apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true" # remember the configuration of nginx controller in the part 1?! without that configuration, it won't work
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: cd.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              name: https
+EOF
+
+# add the hostnames to /etc/hosts
+
+# get the admin password
+argocd admin initial-password -n argocd
+
+# do login
+argocd login cd.yourdomain.com --username admin
+
+# create the app
+kubectl config set-context --current --namespace=argocd
+
+# install the example app
+argocd app create guestbook --repo https://github.com/argoproj/argocd-example-apps.git --path guestbook --dest-server https://kubernetes.default.svc --dest-namespace default
+
+# get app status 
+argocd app get guestbook
+
+# sync the app
+argocd app sync guestbook
+
+
+And the last thing is Tekton CI. Let's see:
+
+# install the tekton operator, that install and keep all things updated and simple to configure
+kubectl apply -f https://storage.googleapis.com/tekton-releases/operator/latest/release.yaml
+
+# apply config to install all resources
+kubectl apply -f https://raw.githubusercontent.com/tektoncd/operator/main/config/crs/kubernetes/config/all/operator_v1alpha1_config_cr.yaml
+
+# add ingress to the dashboard
+kubectl apply -n tekton-pipelines -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tekton-dashboard
+  namespace: tekton-pipelines
+spec:
+  rules:
+  - host: ci.yourdomain.com
+    http:
+      paths:
+      - pathType: ImplementationSpecific
+        backend:
+          service:
+            name: tekton-dashboard
+            port:
+              number: 9097
+EOF
+
+curl -LO https://github.com/tektoncd/cli/releases/download/v0.38.1/tektoncd-cli-0.38.1_Linux-64bit.deb
+dpkg -i ./tektoncd-cli-0.38.1_Linux-64bit.deb
+
+Now we have all the tools installed, next topic we'll start to configure communication between them.
+
+Cya.
+

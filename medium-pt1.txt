@@ -1,0 +1,126 @@
+Well, kubernetes has evolved and (maybe) be the mainstream way to publish applications. Recently I started to create an environment to work with, why? We know that CI/CD and Flows are the mainly process to publish applications nowadays, and like all developer, We learning doing something. So today (in this update) I'll show you how to create a small size kubernetes cluster to work like this. Let's start with preparing the enviroment.
+
+For this I used ubuntu server VM's with Virtual Box. I created 3 VM's with 8vCPU, 16GB of RAM and 100GB of disk with Bridge Network, fixing all VM IP address in my router to resolve names in /etc/hosts. I have a good machine here, but you can try with less resources, like 4 VM's with 4vCPU and 4GB of RAM (put your CPU to work). Disks are necessary, at least 70GB each node, because of persistent volumes that will be created.
+
+For my setup, I've 1 Control Plane + etcd and 2 Worker nodes. This roles are defined by K8s and Rancher. If you create 4 machines, keep 1 Ctrpln and 3 workers, why? From docs:
+"An etcd cluster must be comprised of an odd number of server nodes for etcd to maintain quorum. For a cluster with n servers, quorum is (n/2)+1. For any odd-sized cluster, adding one node will always increase the number of nodes necessary for quorum. Although adding a node to an odd-sized cluster appears better since there are more machines, the fault tolerance is worse. Exactly the same number of nodes can fail without losing quorum, but there are now more nodes that can fail." [https://docs.rke2.io/install/ha]
+
+Let's start:
+
+Create all VM's, format them and do updates:
+
+systemctl stop ufw # stop the software firewall
+systemctl disable ufw # disable the software firewall
+apt update # get updates
+apt upgrade -y # do updates
+apt install nfs-common -y # install nfs for longhorn system
+apt autoremove -y # clean up
+
+We'll use Rancher over RKE2. If you want to know more: [https://docs.rke2.io/] [https://ranchermanager.docs.rancher.com/]. I used this based article to build this [https://ranchergovernment.com/blog/article-simple-rke2-longhorn-and-rancher-install]
+
+Select one of them to be the first control plane of the cluster. This VM will have the token for another machines connect to it. Install RKE2:
+
+curl -sfL https://get.rke2.io | sh - # install rke2
+
+RKE2 uses /etc/rancher/rke2/ as base of config files, so create it. 
+mkdir -p /etc/rancher/rke2/ # create base config directory
+touch /etc/rancher/rke2/config.yaml # create config file
+echo "write-kubeconfig-mode: 0644" >> /etc/rancher/rke2/config.yaml
+# the next configuration is about self-signed certificates, we will need this for the rancher server
+echo "tls-san:
+  - rancher.<yourdomain.com>
+  - <cluster-machine-ip-01>
+  - <cluster-machine-ip-02>
+  - <cluster-machine-ip-03>" >> /etc/rancher/rke2/config.yaml
+
+One nice thing about RKE2 is a helm chart integration. We can change behavior of some components just putting the manifest in the right place, like this about nginx ingress controller:
+
+# this configuration add the ingress-nginx with ssl passthrough, we will need this for argocd ingress
+mkdir -p /var/lib/rancher/rke2/server/manifests
+touch /var/lib/rancher/rke2/server/manifests/rke2-ingress-nginx-config.yaml
+
+echo "apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-ingress-nginx
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    controller:
+      config:
+        use-forwarded-headers: true
+      extraArgs:
+        enable-ssl-passthrough: true" > /var/lib/rancher/rke2/server/manifests/rke2-ingress-nginx-config.yaml
+
+Now, enable and start RKE2 Server.
+systemctl enable rke2-server.service # this enables rke2 server to start on boot
+systemctl start rke2-server.service # start rke2 server 
+
+Create a link for kubectl: 
+ln -s $(find /var/lib/rancher/rke2/data/ -name kubectl) /usr/local/bin/kubectl
+
+And add kubeconfig to environment variables to use with kubectl
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml # for current session
+echo "KUBECONFIG='/etc/rancher/rke2/rke2.yaml'" >> ~/.bashrc # for future sessions
+source ~/.bashrc
+
+Get the token for other servers and agents (workers)
+cat /var/lib/rancher/rke2/server/node-token
+
+(In the repository exists a file showing how to add more control plane servers [https://github.com/luylucas10/rancher-localhost/blob/main/02.1-create-other-server.sh], just append the first server ip and the token in the config.yaml file and do all previous commands.)
+
+It's more easy in the agents nodes, we need less configuration:
+
+mkdir -p /etc/rancher/rke2/ # create directory
+touch /etc/rancher/rke2/config.yaml # create config file
+echo "write-kubeconfig-mode: 0644" >> /etc/rancher/rke2/config.yaml # write kubeconfig mode
+echo "server: https://<cluster-machine-ip-01>:9345" >> /etc/rancher/rke2/config.yaml # main server ip 
+echo "token: <server-token>" >> /etc/rancher/rke2/config.yaml # main server token
+echo "tls-san:
+  - rancher.<yourdomain.com>
+  - <cluster-machine-ip-01>
+  - <cluster-machine-ip-02>
+  - <cluster-machine-ip-03>" >> /etc/rancher/rke2/config.yaml
+
+curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh - # install rke2 agent
+systemctl enable rke2-agent.service # enable rke2 agent
+systemctl start rke2-agent.service # start rke2 agent
+
+Nice. For now every command with kubectl is in the first server:
+
+watch kubectl get nodes # to see the nodes in cluster.
+
+We need helm to install Rancher Server and other apps. Do:
+
+install helm:
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+add rancher repo:
+helm repo add rancher-latest https://releases.rancher.com/server-charts/latest
+
+add jetstack repo:
+helm repo add jetstack https://charts.jetstack.io
+
+install cert-manager:
+helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --version v1.16.1 --set crds.enabled=true
+
+install rancher, this configuration will use cert-manager to create the certificates:
+helm install rancher rancher-latest/rancher --namespace cattle-system --create-namespace --set hostname=rancher.yourdomain.com --set bootstrapPassword=admin 
+
+wait for rancher to be ready:
+kubectl -n cattle-system rollout status deploy/rancher
+
+wait some minutes to get rancher ready, then access rancher.yourdomain.com and login with the password admin, save the new password
+if you need to reset, use that command: kubectl -n cattle-system exec $(kubectl -n cattle-system get pods -l app=rancher --no-headers | head -1 | awk '{ print $1 }') -c rancher -- reset-password
+
+In your machine (the host running virtual box), put the name in the hosts file:
+
+<rancher-server-vm-ip>  rancher.yourdormain.com
+<rancher-server-vm-ip>  cd.yourdormain.com
+<rancher-server-vm-ip>  ci.yourdormain.com
+<rancher-server-vm-ip>  gitlab.yourdormain.com
+<rancher-server-vm-ip>  storage.yourdormain.com
+
+We'll create all this dns in the cluster. For now, we have a working kubernetes cluster. You can explore it.
+
+Next, We start to configure all tools that we'll need.
