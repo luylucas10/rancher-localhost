@@ -6,10 +6,7 @@ touch /etc/rancher/rke2/config.yaml # create config file
 echo "write-kubeconfig-mode: 0644" >> /etc/rancher/rke2/config.yaml # write kubeconfig mode
 # the next configuration is about self-signed certificates, we will need this for the rancher server
 echo "tls-san:
-  - rancher.<yourdomain.com>
-  - <cluster-machine-ip-01>
-  - <cluster-machine-ip-02>
-  - <cluster-machine-ip-03>" >> /etc/rancher/rke2/config.yaml
+  - <yourdomain.com>" >> /etc/rancher/rke2/config.yaml
 
 # this configuration add the ingress-nginx with ssl passthrough, we will need this for argocd ingress
 mkdir -p /var/lib/rancher/rke2/server/manifests
@@ -33,6 +30,9 @@ systemctl start rke2-server.service # start rke2 server
 
 # create a link for kubectl
 ln -s $(find /var/lib/rancher/rke2/data/ -name kubectl) /usr/local/bin/kubectl
+
+# install helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # add kubeconfig to environment variables to use with kubectl
 export KUBECONFIG=/etc/rancher/rke2/rke2.yaml # for current session

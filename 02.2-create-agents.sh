@@ -5,11 +5,6 @@ touch /etc/rancher/rke2/config.yaml # create config file
 echo "write-kubeconfig-mode: 0644" >> /etc/rancher/rke2/config.yaml # write kubeconfig mode
 echo "server: https://192.168.0.10:9345" >> /etc/rancher/rke2/config.yaml # main server ip 
 echo "token: <server-token>" >> /etc/rancher/rke2/config.yaml # main server token
-echo "tls-san:
-  - rancher.<yourdomain.com>
-  - <cluster-machine-ip-01>
-  - <cluster-machine-ip-02>
-  - <cluster-machine-ip-03>" >> /etc/rancher/rke2/config.yaml
 
 curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh - # install rke2 agent
 systemctl enable rke2-agent.service # enable rke2 agent

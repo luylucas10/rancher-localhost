@@ -7,10 +7,7 @@ echo "write-kubeconfig-mode: 0644" >> /etc/rancher/rke2/config.yaml # write kube
 echo "server: https://192.168.0.10:9345" >> /etc/rancher/rke2/config.yaml # main server ip
 echo "token: <server-token>" >> /etc/rancher/rke2/config.yaml # main server token
 echo "tls-san:
-  - rancher.<yourdomain.com>
-  - <cluster-machine-ip-01>
-  - <cluster-machine-ip-02>
-  - <cluster-machine-ip-03>" >> /etc/rancher/rke2/config.yaml
+  - <yourdomain.com>" >> /etc/rancher/rke2/config.yaml
 
 # is necessary to have the same configuration for other servers
 mkdir -p /var/lib/rancher/rke2/server/manifests
